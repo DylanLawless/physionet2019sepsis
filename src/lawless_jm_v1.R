@@ -1,5 +1,7 @@
 # https://mc-stan.org/rstanarm/articles/jm.html
 
+source("./import_sepsis_data/R")
+
 # Lets try
 # Estimating Joint Models for Longitudinal and Time-to-Event Data with rstanarm
 
@@ -9,6 +11,7 @@
 library(ggplot2)
 library(bayesplot)
 theme_set(bayesplot::theme_default())
+library(rstanarm)
 
 #  multiple-row per patient longitudinal biomarker information, as shown in
 head(pbcLong)
@@ -23,7 +26,7 @@ help("rstanarm-datasets", package = "rstanarm")
 
 # Univariate joint model (current value association structure) ----
 
-library(rstanarm)
+
 mod1 <- stan_jm(formulaLong = logBili ~ sex + trt + year + (year | id),
 								dataLong = pbcLong,
 								formulaEvent = survival::Surv(futimeYears, death) ~ sex + trt,
@@ -49,13 +52,12 @@ as.data.frame(VarCorr(mod1))
 # In the previous example we were fitting a shared parameter joint model which assumed that the log hazard of the event (in this case the log hazard of death) at time t was linearly related to the subject-specific expected value of the longitudinal marker (in this case the expected value of log serum bilirubin) also at time t. This is the default association structure, although it could be explicitly specified by setting the assoc = "etavalue" argument.
 
 # However, let’s suppose we believe that the log hazard of death is actually related to both the current value of log serum bilirubin and the current rate of change in log serum bilirubin. To estimate this joint model we need to indicate that we want to also include the subject-specific slope (at time t) from the longitudinal submodel as part of the association structure. We do this by setting the assoc argument equal to a character vector c("etavalue", "etaslope") which indicates our desired association structure:
-	
 
 mod2 <- stan_jm(formulaLong = logBili ~ sex + trt + year + (year | id),
 								dataLong = pbcLong,
 								formulaEvent = survival::Surv(futimeYears, death) ~ sex + trt,
 								dataEvent = pbcSurv,
-								assoc = c("etavalue", "etaslope"),
+								assoc = c("etavalue", "etaslope"), # This line added compared to mod1
 								time_var = "year",
 								chains = 1, refresh = 2000, seed = 12345)
 
@@ -64,15 +66,14 @@ mod2 <- stan_jm(formulaLong = logBili ~ sex + trt + year + (year | id),
 
 # Suppose instead that we were interested in two repeatedly measured clinical biomarkers, log serum bilirubin and serum albumin, and their association with the risk of death. We may wish to model these two biomarkers, allowing for the correlation between them, and estimating their respective associations with the log hazard of death. We will fit a linear mixed effects submodel (identity link, normal distribution) for each biomarker with a patient-specific intercept and linear slope but no other covariates. In the event submodel we will include gender (sex) and treatment (trt) as baseline covariates. Each biomarker is assumed to be associated with the log hazard of death at time 𝑡  via it’s expected value at time 𝑡 (i.e. a current value association structure).
 
-
 mod3 <- stan_jm(
 	formulaLong = list(
-		logBili ~ sex + trt + year + (year | id),
-		albumin ~ sex + trt + year + (year | id)),
+		logBili ~ sex + trt + year + (year | id), # each biomarker in a list
+		albumin ~ sex + trt + year + (year | id)),  # each biomarker in a list
 	formulaEvent = survival::Surv(futimeYears, death) ~ sex + trt,
 	dataLong = pbcLong, dataEvent = pbcSurv,
 	time_var = "year",
-	chains = 1, refresh = 500, seed = 12345)
+	chains = 1, refresh = 500, seed = 12345) # But no assoc line compared to mod2
 
 print(mod3)
 
@@ -491,7 +492,8 @@ mod3 <- stan_jm(
 # This error arises because there are more levels in your random effects grouping than there are observations available to estimate these parameters, making the model overparameterized and the estimates of the random effects unidentifiable.
 
 
-print("THIS IS SLOW !! 230 seconds")
+print("THIS IS SLOW !! 230 seconds on Dante")
+print("THIS IS SLOW !! 130 seconds on Akira")
 
 mod3 <- stan_jm(
 	formulaLong = list(
@@ -520,13 +522,17 @@ summary(mod3, pars = "assoc")
 # 
 # Here are the plots for log serum bilirubin:
 
+list_id <- mod3$flevels$id |> head()
+list_id <- c(3,10,103,112)
 p1 <- posterior_traj(mod3, m = 1, ids = 6:8)
+p1 <- posterior_traj(mod3, m = 1, ids = list_id)
+
 pp1 <- plot(p1, plot_observed = TRUE)
 pp1
 
 # and here are the plots for serum albumin:
 
-p2 <- posterior_traj(mod3, m = 2, ids = 6:8)
+p2 <- posterior_traj(mod3, m = 2, ids = list_id)
 pp2 <- plot(p2, plot_observed = TRUE)
 pp2
 
@@ -534,13 +540,13 @@ pp2
 # 
 # If we wanted to extrapolate the trajectory forward from the event or censoring time for each individual, then this can be easily achieved by specifying extrapolate = TRUE in the posterior_traj call. For example, here is the plot for log serum bilirubin with extrapolation:
 
-p3 <- posterior_traj(mod3, m = 1, ids = 6:8, extrapolate = TRUE)
+p3 <- posterior_traj(mod3, m = 1, ids = list_id, extrapolate = TRUE)
 pp3 <- plot(p3, plot_observed = TRUE, vline = TRUE)
 pp3
 
 # and for serum albumin with extrapolation:
 
-p4 <- posterior_traj(mod3, m = 2, ids = 6:8, extrapolate = TRUE)
+p4 <- posterior_traj(mod3, m = 2, ids = list_id, extrapolate = TRUE)
 pp4 <- plot(p4, plot_observed = TRUE, vline = TRUE)
 pp4
 
@@ -554,17 +560,12 @@ pp4
 # 
 # As an example, let plot the predicted individual-specific conditional survival curve for the same three individual’s that were used in the previous example. The predicted survival curve will be obtained under the multivariate joint model estimated above.
 
-p5 <- posterior_survfit(mod3, ids = 6:8)
+p5 <- posterior_survfit(mod3, ids = list_id)
 pp5 <- plot(p5)
 pp5
 
-
-p5 <- posterior_survfit(mod3, ids = 1:8)
-pp5 <- plot(p5)
-pp5
-
-c <- posterior_survfit(mod3)
-ppc <- plot(c)
+# c <- posterior_survfit(mod3)
+# ppc <- plot(c)
 
 print("can we just print the most intersting results? ")
 
@@ -603,8 +604,8 @@ df$platelet <- df$O2Sat
 
 # First, let’s extract the data for subject 8 and then rename their subject ID value so that they appear to be an individual who was not included in our training dataset:
 
-ndL <- pbcLong[pbcLong$id == 8, , drop = FALSE]
-ndE <- pbcSurv[pbcSurv$id == 8, , drop = FALSE]
+ndL <- pbcLong[pbcLong$id == 103, , drop = FALSE]
+ndE <- pbcSurv[pbcSurv$id == 103, , drop = FALSE]
 ndL$id <- paste0("new_patient")
 ndE$id <- paste0("new_patient")
 
@@ -633,6 +634,18 @@ pp7 <- plot(p7, plot_observed = TRUE, vline = TRUE)
 pp7
 
 
+# # Plotting the data with ggplot2 for p7
+# plot_p7 <- ggplot(p7, aes(x = year, y = yfit)) +
+#   geom_line() +
+#   geom_ribbon(aes(ymin = ci_lb, ymax = ci_ub), alpha = 0.2, fill = "blue") +
+#   geom_ribbon(aes(ymin = pi_lb, ymax = pi_ub), alpha = 0.1, fill = "red") +
+#   labs(title = "Fit Model Predictions Over Years",
+#        x = "Year",
+#        y = "Fitted Value") +
+#   theme_minimal()
+# 
+# print(plot_p7)
+
 # For the conditional survival probabilities we use similar information, provided to the posterior_survfit function:
 p8 <- posterior_survfit(mod3,
 												newdataLong = ndL,
@@ -642,9 +655,48 @@ p8 <- posterior_survfit(mod3,
 pp8 <- plot(p8)
 pp8
 
+# Slice data where survpred first reaches > 0.5
+sliced_data <- subset(p8, survpred < 0.5)
+
+# Output the first row where condition is met
+required_slice <- sliced_data[1, ]
+required_slice
+
+pp8 <- pp8 +
+  geom_segment(aes(x = required_slice$year,
+                   xend = required_slice$year,
+                   y=0, 
+                   yend = required_slice$survpred),
+               color = "red", linetype = "dashed")  +
+  geom_segment(aes(x =  0,
+                   xend = required_slice$year,
+                   y= required_slice$survpred, 
+                   yend =  required_slice$survpred),
+               color = "red", linetype = "dashed")  +
+  geom_label(aes(label = round(required_slice$year,2), y=required_slice$survpred,x=required_slice$year),  fill = "white") 
+
+
 # We can then use the plot_stack_jm function, as we saw in a previous example, to stack the plots of the longitudinal trajectory and the conditional survival curve:
 
 plot_stack_jm(yplot = list(pp6, pp7), survplot = pp8)
+p8
+class(p8)
+
+# Plotting the data with ggplot2
+p <- ggplot(p8, aes(x = year, y = survpred)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = ci_lb, ymax = ci_ub), alpha = 0.2) +
+  labs(title = "Survival Prediction Over Years",
+       x = "Year",
+       y = "Survival Prediction") +
+  theme_minimal() 
+print(p)
+
+
+
+
+library(patchwork)
+(pp6 + xlim(0,300)) / (pp7 + xlim(0,300)) /  (pp8 + xlim(0,300)) +  plot_layout(axes = "collect", axis_titles = "collect")
 
 
 # Here we see that the predicted longitudinal trajectories and conditional survival curve for this individual, obtained using the dynamic predictions approach, are similar to the predictions we obtained when we used their individual-specific parameters from the original model estimation. This is because in both situations we are conditioning on the same outcome data.
